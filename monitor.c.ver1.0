@@ -1,0 +1,371 @@
+/*
+** monitor.c
+** Version4.0
+** Description: This program sees status of all file queue semi-graphically.
+*/
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <curses.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+
+#include "fqueue.h"
+#include "shm_queue.h"
+#include "fq_socket.h"
+#include "screen.h"
+#include "fq_file_list.h"
+#include "fuser_popen.h"
+#include "fq_manage.h"
+#include "parson.h"
+#include "fq_external_env.h"
+#include "monitor.h"
+#include "fq_linkedlist.h"
+
+#define HEAD_ROWS (6)
+
+screen_t s;
+int winsize_columns;
+int winsize_rows;
+int current_x = 5;
+int current_y = 0;
+int opened = 0;
+bool	stop_key = false;
+
+static bool OpenFileQueues_and_MakeLinkedlist(fq_logger_t *l, fq_container_t *fq_c, linkedlist_t *ll, int winsize_columns, int winsize_rows);
+
+typedef struct _mon mon_t;
+struct _mon {
+	int i;
+	short x;
+	short y;
+	long before_en_sum;
+	long before_de_sum;
+	fqueue_obj_t *obj;
+};
+
+static bool my_scan_function( size_t value_sz, void *value)
+{
+	mon_t *tmp;
+	tmp = (mon_t *) value;
+
+	int x,y ;
+	x = tmp->x;
+	y = tmp->y;
+
+	mvprintw(y, x, "%d", tmp->i); x += 2; x++;
+	mvprintw(y, x, "%s", tmp->obj->qname); x += 16; x++;
+	mvprintw(y, x, "%ld", tmp->obj->on_get_diff(0, tmp->obj)); x += 6; x++;
+
+    clrtoeol();
+
+	float usage;
+	usage = tmp->obj->on_get_usage(0, tmp->obj);
+	if(usage >= 20.0 && usage < 50.0) {
+		init_pair(1, COLOR_GREEN, COLOR_BLACK);
+		attrset(COLOR_PAIR(1)); /* set new color attribute */
+		mvprintw(y, x, "%5.2f", usage); x += 6; x++;
+		attrset(COLOR_PAIR(0)); /* set old color attribute */
+	} else if( usage >= 50.0 && usage < 80.0 ) {
+		init_pair(2, COLOR_YELLOW, COLOR_BLACK);
+		attrset(COLOR_PAIR(2)); /* set new color attribute */
+		mvprintw(y, x, "%5.2f", usage); x += 6; x++;
+		attrset(COLOR_PAIR(0)); /* set old color attribute */
+	} else if( usage >= 80.0 ) {
+		init_pair(3, COLOR_RED, COLOR_BLACK);
+		attrset(COLOR_PAIR(3)); /* set new color attribute */
+		mvprintw(y, x, "%5.2f", usage); x += 6; x++;
+		attrset(COLOR_PAIR(0)); /* set old color attribute */
+	} else {
+		mvprintw(y, x, "%5.2f", usage); x += 6; x++;
+	}
+
+	long en_tps=0;
+	long de_tps=0;
+
+	if( tmp->before_en_sum > 0 ) {
+		en_tps = tmp->obj->h_obj->h->en_sum - tmp->before_en_sum;
+		tmp->before_en_sum = tmp->obj->h_obj->h->en_sum;
+	} else {
+		tmp->before_en_sum = tmp->obj->h_obj->h->en_sum;
+	}
+	
+	if( tmp->before_de_sum > 0 ) {
+		de_tps = tmp->obj->h_obj->h->de_sum - tmp->before_de_sum;
+		tmp->before_de_sum = tmp->obj->h_obj->h->de_sum;
+	} else {
+		tmp->before_de_sum = tmp->obj->h_obj->h->de_sum;
+	}
+	
+	if( en_tps > 0 ) {
+		init_pair(1, COLOR_GREEN, COLOR_BLACK);
+		attrset(COLOR_PAIR(1));
+		mvprintw(y, x, "%ld", en_tps); x += 4; x++;
+		attrset(COLOR_PAIR(0));
+	} else {
+		mvprintw(y, x, "%ld", en_tps); x += 4; x++;
+	}
+
+	if( de_tps > 0 ) {
+		init_pair(4, COLOR_GREEN, COLOR_BLACK);
+		attrset(COLOR_PAIR(4));
+		mvprintw(y, x, "%ld", de_tps); x += 4; x++;
+		attrset(COLOR_PAIR(0));
+	} else {
+		mvprintw(y, x, "%ld", de_tps); x += 4; x++;
+	}
+
+	return(true);
+}
+
+bool print_head(fq_logger_t *l)
+{
+    char    szTime[30];
+    long    sec, usec;
+	int	y=0, x=0;
+
+    memset(szTime, 0x00, sizeof(szTime));
+    MicroTime(&sec, &usec, szTime);
+    move(y++,x);
+    clrtoeol();
+    mvprintw(0, 0, "%s -refresh interval(%d)sec.", szTime, 1);
+
+	char hostname[64];
+	int fd;
+	struct ifreq ifr;
+	char IPbuffer[32];
+	char *eth_name = "eno1";
+
+	gethostname(hostname, 64);
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	ifr.ifr_addr.sa_family = AF_INET;
+	snprintf(ifr.ifr_name, IFNAMSIZ, "%s", eth_name);
+	// int snprintf(char *str, size_t size, const char *format, ...);
+	ioctl(fd, SIOCGIFADDR, &ifr);
+
+	sprintf(IPbuffer, "%s", inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
+	close(fd);
+
+    mvprintw(y++, 0, "- Hostname: %s ", hostname); 
+    mvprintw(y++, 0, "- IP address: %s ,  Number of Queues: %d", IPbuffer, opened);
+
+	char *fq_data_home = getenv("FQ_DATA_HOME");
+	if( !fq_data_home ) {
+		fq_log(l, FQ_LOG_ERROR, "There is no FQ_DATA_HOME in your env values.");
+		return false;
+	}
+	mvprintw(y++, 0, "- FQ_DATA_HOME: %s", fq_data_home);
+
+	
+    char    Center_Title[128];
+	int		solution_no;
+    sprintf(Center_Title, "[ SAMSUNG LogCollector FileQueue Status. library version %s ]", FQUEUE_LIB_VERSION);
+    center_disp(y++, Center_Title);
+
+    draw_bar(y++, 0);
+
+	attron(A_BOLD);
+	mvprintw(y, x, "%s", "SN");  x+=2; x++;
+	mvprintw(y, x, "%s", "QNAME"); x += 16; x++;
+	mvprintw(y, x, "%s", "GAP"); x += 6; x++;
+	mvprintw(y, x, "%s", "Usage"); x += 6; x++;
+	mvprintw(y, x, "%s", "TPS-in / out"); x += 4; x++;
+
+	if( opened > (winsize_rows-HEAD_ROWS) ) {
+		x = winsize_columns / 2;
+		mvprintw(y, x, "%s", "SN");  x+=2; x++;
+		mvprintw(y, x, "%s", "QNAME"); x += 16; x++;
+		mvprintw(y, x, "%s", "GAP"); x += 6; x++;
+		mvprintw(y, x, "%s", "Usage"); x += 6; x++;
+		mvprintw(y, x, "%s", "TPS-in / out"); x += 4; x++;
+	}
+	attroff(A_BOLD);
+
+	refresh();
+
+	return true;
+}
+
+static void *waiting_key_thread(void *arg)
+{
+    int key;
+
+	sleep(2);
+    while(1) {
+		move( winsize_rows, winsize_columns);
+		key = getch();
+		switch(key) {
+            case 'q':
+				stop_key = true;
+				break;
+            default:
+                break;
+        }
+		if(stop_key == true) break;
+		else continue;
+    }
+L0:
+    pthread_exit((void *)0);
+}
+int main(int ac, char **av)
+{
+    int rc;
+	fq_logger_t *l = NULL;
+	fq_container_t *fq_c=NULL;
+	linkedlist_t	*ll=NULL;
+
+	/* shared memory */
+    key_t     key=5678;
+    int     sid = -1;
+    int     size;
+
+	rc = fq_open_file_logger(&l, "./monitor.log", FQ_LOG_DEBUG_LEVEL);
+    CHECK(rc == TRUE);
+
+	/* here error : core dump */
+	rc = load_fq_container(l, &fq_c);
+	CHECK( rc == TRUE );
+
+	ll = linkedlist_new("monitor");
+
+	winsize_columns = get_col_winsize();
+	winsize_rows = get_row_winsize();
+
+	bool tf;
+	tf = OpenFileQueues_and_MakeLinkedlist(l, fq_c, ll, winsize_columns, winsize_rows);
+	CHECK(tf == true);
+
+	/* check screen size */
+	if( winsize_columns < 120 ) { 
+		printf("Please increase your terminal columns size.(more than 120)\n");
+		exit(0);
+	}
+	if( (winsize_rows-HEAD_ROWS) < (opened/2 + 1) ) {
+		printf("Please increase your terminal rows size.(more than %d)\n", (opened/2)+HEAD_ROWS);
+		exit(0);
+	}
+
+	init_screen(&s);
+
+	fq_log(l, FQ_LOG_DEBUG, "winsize_columns=[%d], winsize_rows=[%d].\n", winsize_columns, winsize_rows);
+
+#if 1
+	pthread_t thread_cmd;
+	int thread_id;
+	pthread_attr_t attr;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&thread_cmd, &attr, waiting_key_thread, &thread_id);
+#endif
+
+	while(1) {
+		/*
+		** Head
+		*/
+		print_head(l);
+
+		int ch;
+		linkedlist_callback(ll, my_scan_function );
+#if 0
+		ch = getch();
+		if(ch == 'q') break;
+#else
+		if(stop_key == true ) break;
+		else { 
+			sleep(1);
+		}
+#endif
+	}
+
+	if(ll) linkedlist_free(&ll);
+
+	if(l) fq_close_file_logger(&l);
+
+	end_screen(&s, 0);
+    return(0);
+}
+
+static bool OpenFileQueues_and_MakeLinkedlist(fq_logger_t *l, fq_container_t *fq_c, linkedlist_t *ll, int winsize_columns, int winsize_rows)
+{
+	dir_list_t *d=NULL;
+	fq_node_t *f;
+	ll_node_t *ll_node = NULL;
+	int sn=1;
+
+	for( d=fq_c->head; d!=NULL; d=d->next) {
+		for( f=d->head; f!=NULL; f=f->next) {
+			fqueue_obj_t *obj=NULL;
+			int rc;
+			mon_t *tmp = NULL;
+
+			obj = calloc(1, sizeof(fqueue_obj_t));
+
+			fq_log(l, FQ_LOG_DEBUG, "OPEN: [%s/%s].", d->dir_name, f->qname);
+			
+			char *p=NULL;
+			if( (p= strstr(f->qname, "SHM_")) == NULL ) {
+				rc =  OpenFileQueue(l, NULL, NULL, NULL, NULL, d->dir_name, f->qname, &obj);
+			} 
+			else {
+				rc =  OpenShmQueue(l, d->dir_name, f->qname, &obj);
+			}
+			if( rc != TRUE ) {
+				fq_log(l, FQ_LOG_ERROR, "OpenFileQueue('%s') error.", f->qname);
+				return(false);
+			}
+			fq_log(l, FQ_LOG_DEBUG, "%s:%s open success.", d->dir_name, f->qname);
+
+			/*
+			** Because of shared memory queue, We change it to continue.
+			*/
+			// CHECK(rc == TRUE);
+
+			char	key[36];
+			sprintf(key, "%s/%s", d->dir_name, f->qname);
+			tmp = calloc(1, sizeof(mon_t));
+			tmp->i = sn++;
+			if( sn > (winsize_rows-HEAD_ROWS) ) {
+				tmp->y = (sn % (winsize_rows-HEAD_ROWS)) + HEAD_ROWS;
+				tmp->x = winsize_columns / 2;
+			}
+			else {
+				tmp->y = (sn-1)+HEAD_ROWS;
+				tmp->x = 0;
+			}
+
+			tmp->before_en_sum = obj->h_obj->h->en_sum;
+			tmp->before_de_sum = obj->h_obj->h->de_sum;
+
+			tmp->obj = obj;
+
+			ll_node = linkedlist_put(ll, key, (void *)tmp, sizeof(int)+sizeof(fqueue_obj_t));
+
+			if(!ll_node) {
+				fq_log(l, FQ_LOG_ERROR, "linkedlist_put('%s', '%s') error.", d->dir_name, f->qname);
+				return(false);
+			}
+
+			// printf("tmp.i=[%d], name->[%s/%s], tmp->obj->h_obj->h->msglen=[%zu]\n", 
+			// 	tmp->i, tmp->obj->path, tmp->obj->qname, tmp->obj->h_obj->h->msglen);
+
+			if(tmp) free(tmp);
+
+			opened++;
+		}
+	}
+
+	fq_log(l, FQ_LOG_INFO, "Number of opened filequeue is [%d].", opened);
+
+	return(true);
+}

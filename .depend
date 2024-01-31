@@ -1,0 +1,35 @@
+extract_files_from_dir.o: extract_files_from_dir.c \
+ /home/logclt/include/fq_common.h /home/logclt/include/config.h \
+ /home/logclt/include/fq_defs.h /home/logclt/include/fq_cache.h \
+ /home/logclt/include/fq_logger.h /home/logclt/include/fq_global.h \
+ /home/logclt/include/fq_version.h /home/logclt/include/fq_types.h \
+ /home/logclt/include/fq_logger.h /home/logclt/include/fq_fstat.h \
+ fq_linkedlist.h
+fq_linkedlist.o: fq_linkedlist.c /home/logclt/include/config.h \
+ /home/logclt/include/fq_defs.h /home/logclt/include/config.h \
+ /home/logclt/include/fq_common.h /home/logclt/include/fq_defs.h \
+ /home/logclt/include/fq_cache.h /home/logclt/include/fq_logger.h \
+ /home/logclt/include/fq_global.h /home/logclt/include/fq_version.h \
+ /home/logclt/include/fq_types.h fq_linkedlist.h \
+ /home/logclt/include/fq_logger.h
+fuser_popen.o: fuser_popen.c /home/logclt/include/fq_delimiter_list.h \
+ /home/logclt/include/fq_logger.h /home/logclt/include/fq_global.h \
+ /home/logclt/include/fq_version.h /home/logclt/include/fq_types.h \
+ /home/logclt/include/fq_common.h /home/logclt/include/config.h \
+ /home/logclt/include/fq_defs.h /home/logclt/include/fq_cache.h
+monitor.o: monitor.c /home/logclt/include/fqueue.h \
+ /home/logclt/include/fq_flock.h /home/logclt/include/fq_logger.h \
+ /home/logclt/include/fq_global.h /home/logclt/include/fq_version.h \
+ /home/logclt/include/fq_types.h /home/logclt/include/fq_unixQ.h \
+ /home/logclt/include/fq_eventlog.h \
+ /home/logclt/include/fq_external_env.h /home/logclt/include/fq_monitor.h \
+ /home/logclt/include/fq_semaphore.h /home/logclt/include/fq_heartbeat.h \
+ /home/logclt/include/fq_common.h /home/logclt/include/config.h \
+ /home/logclt/include/fq_defs.h /home/logclt/include/fq_cache.h \
+ /home/logclt/include/fq_typedef.h /home/logclt/include/shm_queue.h \
+ /home/logclt/include/fq_socket.h screen.h \
+ /home/logclt/include/fq_file_list.h fuser_popen.h \
+ /home/logclt/include/fq_manage.h /home/logclt/include/fq_external_env.h \
+ monitor.h fq_linkedlist.h /home/logclt/include/fq_logger.h \
+ extract_files_from_dir.h
+screen.o: screen.c screen.h
